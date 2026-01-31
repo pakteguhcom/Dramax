@@ -18,7 +18,7 @@ export default function FreeReelsWatchPage() {
   const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(0); 
   const [showEpisodeList, setShowEpisodeList] = useState(false);
   const [videoQuality, setVideoQuality] = useState<'h264' | 'h265'>('h264');
-  const [useProxy, setUseProxy] = useState(false); // Revert to direct play per user request
+  const [useProxy, setUseProxy] = useState(true); // Default to true to avoid CORS issues
   
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -32,7 +32,7 @@ export default function FreeReelsWatchPage() {
       const epIndex = parseInt(epParam, 10) - 1; // URL is 1-based, internal is 0-based
       if (!isNaN(epIndex) && epIndex >= 0) {
         setCurrentEpisodeIndex(epIndex);
-        setUseProxy(false); // Reset proxy usage on episode change
+        // setUseProxy(false); // REMOVED: Keep proxy active
       }
     }
   }, [searchParams]);
@@ -375,12 +375,6 @@ export default function FreeReelsWatchPage() {
                 className="w-full h-full object-contain max-h-[100dvh]"
                 poster={drama.cover}
                 onEnded={handleVideoEnded}
-                onError={(e) => {
-                    if (!useProxy) {
-                        console.log("Video load failed, switching to proxy...");
-                        setUseProxy(true);
-                    }
-                }}
                 {...({ disableRemotePlayback: true, referrerPolicy: "no-referrer" } as any)}
                 crossOrigin="anonymous"
               >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useFlickReelsDetail } from "@/hooks/useFlickReels";
 import { ChevronLeft, ChevronRight, Loader2, List, AlertCircle } from "lucide-react";
@@ -16,9 +16,14 @@ export default function FlickReelsWatchPage() {
   // Use separate state for active ID to allow instant UI updates
   const [activeVideoId, setActiveVideoId] = useState(initialVideoId);
   const [showEpisodeList, setShowEpisodeList] = useState(false);
-  const [useProxy, setUseProxy] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [videoReady, setVideoReady] = useState(false);
+  const [warmupError, setWarmupError] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Stable timestamp that only changes with episode or retry
+  const videoTimestamp = useRef(Date.now());
+  // Track if this is initial load (should wait for warmup) vs auto-next (should be seamless)
+  const isInitialLoad = useRef(true);
 
   const { data, isLoading, error, refetch } = useFlickReelsDetail(bookId);
 
@@ -26,8 +31,9 @@ export default function FlickReelsWatchPage() {
   useEffect(() => {
     if (params.videoId && params.videoId !== activeVideoId) {
       setActiveVideoId(params.videoId as string);
-      setUseProxy(false);
       setRetryCount(0);
+      setVideoReady(false);
+      setWarmupError(false);
     }
   }, [params.videoId]);
 
@@ -45,10 +51,76 @@ export default function FlickReelsWatchPage() {
 
   const totalEpisodes = episodes.length;
 
+  // Update video src - combines warmup and src update
+  // For initial load: wait for warmup before setting src
+  // For auto-next: set src immediately, warmup runs in background
+  useEffect(() => {
+    if (!currentEpisodeData?.raw?.videoUrl) return;
+    
+    // Update timestamp when video changes
+    videoTimestamp.current = Date.now();
+    
+    const videoUrl = currentEpisodeData.raw.videoUrl;
+    const newSrc = `/api/proxy/video?url=${encodeURIComponent(videoUrl)}&referer=${encodeURIComponent("https://www.flickreels.com/")}&_t=${videoTimestamp.current}`;
+    const warmupUrl = `/api/proxy/warmup?url=${encodeURIComponent(videoUrl)}`;
+    
+    if (isInitialLoad.current) {
+      // Initial load: wait for warmup before playing
+      setVideoReady(false);
+      setWarmupError(false);
+      
+      fetch(warmupUrl)
+        .then(res => res.json())
+        .then(data => {
+          console.log("[Warmup] Initial load:", data.success ? "success" : "failed");
+          setVideoReady(true);
+          if (!data.success) setWarmupError(true);
+          
+          // Mark that initial load is done
+          isInitialLoad.current = false;
+        })
+        .catch(err => {
+          console.error("[Warmup] Error:", err);
+          setVideoReady(true);
+          setWarmupError(true);
+          isInitialLoad.current = false;
+        });
+    } else {
+      // Auto-next: update src immediately, warmup in background
+      if (videoRef.current) {
+        videoRef.current.src = newSrc;
+        videoRef.current.load();
+        videoRef.current.play().catch(() => {});
+        
+        // Fire warmup in background (don't await)
+        fetch(warmupUrl).catch(() => {});
+      }
+    }
+  }, [currentEpisodeData?.raw?.videoUrl, retryCount]);
+
+  // Set initial video src after warmup completes (only for initial load)
+  useEffect(() => {
+    if (!videoReady || !currentEpisodeData?.raw?.videoUrl || !videoRef.current) return;
+    
+    const newSrc = `/api/proxy/video?url=${encodeURIComponent(currentEpisodeData.raw.videoUrl)}&referer=${encodeURIComponent("https://www.flickreels.com/")}&_t=${videoTimestamp.current}`;
+    
+    // Check if src needs update
+    if (videoRef.current.src !== newSrc && !videoRef.current.src.endsWith(newSrc.split('?')[1])) {
+       videoRef.current.src = newSrc;
+       videoRef.current.load();
+       videoRef.current.play().catch(() => {});
+       
+       // Mark initial load as done after we've set the src
+       if (isInitialLoad.current) {
+         isInitialLoad.current = false;
+       }
+    }
+  }, [videoReady, currentEpisodeData?.raw?.videoUrl]);
+
   // Handlers
   const handleEpisodeChange = (episodeId: string, preserveFullscreen = false) => {
     setActiveVideoId(episodeId);
-    setUseProxy(false);
+    setRetryCount(0); // Reset retry count when changing episodes
     setShowEpisodeList(false);
 
     if (preserveFullscreen) {
@@ -61,6 +133,7 @@ export default function FlickReelsWatchPage() {
   const handleVideoEnded = () => {
     const nextIndex = currentIndex + 1;
     if (nextIndex < totalEpisodes) {
+      // Video element stays mounted, so fullscreen is preserved automatically
       handleEpisodeChange(episodes[nextIndex].id, true);
     }
   };
@@ -127,34 +200,35 @@ export default function FlickReelsWatchPage() {
       {/* Main Video Area */}
       <div className="flex-1 w-full h-full relative bg-black flex flex-col items-center justify-center">
          <div className="relative w-full h-full flex items-center justify-center">
-            {currentEpisodeData ? (
-              <video
-                ref={videoRef}
-                src={useProxy ? `/api/proxy/video?url=${encodeURIComponent(currentEpisodeData.raw.videoUrl)}&referer=${encodeURIComponent("https://www.flickreels.com/")}` : currentEpisodeData.raw.videoUrl}
-                controls
-                autoPlay
-                className="w-full h-full object-contain max-h-[100dvh]"
-                poster={currentEpisodeData.raw.chapter_cover}
-                onEnded={handleVideoEnded}
-                onError={async (e) => {
-                    if (!useProxy) {
-                        // First try: switch to proxy
-                        console.log("Video load failed, switching to proxy...");
-                        setUseProxy(true);
-                    } else if (retryCount < 2) {
-                        // Proxy also failed - token probably expired, refetch fresh URLs
-                        console.log("Proxy also failed, refetching fresh data...");
-                        setRetryCount(prev => prev + 1);
-                        setUseProxy(false);
-                        await refetch();
-                    }
-                }}
-                // @ts-ignore
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center z-20">
+            {/* Always render video element to preserve fullscreen state */}
+            <video
+              ref={videoRef}
+              controls
+              autoPlay
+              className={cn(
+                "w-full h-full object-contain max-h-[100dvh]",
+                (!currentEpisodeData || !videoReady) && "invisible"
+              )}
+              poster={currentEpisodeData?.raw?.chapter_cover}
+              onEnded={handleVideoEnded}
+              onError={async (e) => {
+                  if (retryCount < 2) {
+                      // Proxy failed - token probably expired, refetch fresh URLs
+                      console.log("Video load failed, refetching fresh data...");
+                      setRetryCount(prev => prev + 1);
+                      await refetch();
+                  }
+              }}
+              // @ts-ignore
+              referrerPolicy="no-referrer"
+            />
+            {/* Loading overlay */}
+            {(!currentEpisodeData || !videoReady) && (
+              <div className="absolute inset-0 flex items-center justify-center z-20 flex-col gap-2">
                 <Loader2 className="w-10 h-10 text-primary animate-spin" />
+                {!videoReady && currentEpisodeData && (
+                  <span className="text-white/60 text-sm">Preparing video...</span>
+                )}
               </div>
             )}
          </div>

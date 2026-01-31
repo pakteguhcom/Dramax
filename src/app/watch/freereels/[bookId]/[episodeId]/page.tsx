@@ -16,7 +16,7 @@ export default function FreeReelsWatchPage() {
   
   const [showEpisodeList, setShowEpisodeList] = useState(false);
   const [videoQuality, setVideoQuality] = useState<'h264' | 'h265'>('h264');
-  const [useProxy, setUseProxy] = useState(false);
+  const [useProxy, setUseProxy] = useState(true); // Default to true to avoid CORS issues
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const { data, isLoading, error } = useFreeReelsDetail(bookId);
@@ -50,7 +50,6 @@ export default function FreeReelsWatchPage() {
     if (episodeId === activeEpisodeId) return; 
     
     // Only reset transient UI states
-    setUseProxy(false);
     setShowEpisodeList(false);
 
     // Update URL - this will trigger re-render with new params
@@ -162,12 +161,6 @@ export default function FreeReelsWatchPage() {
                 className="w-full h-full object-contain max-h-[100dvh]"
                 poster={drama.cover}
                 onEnded={handleVideoEnded}
-                onError={(e) => {
-                    if (!useProxy) {
-                        console.log("Video load failed, switching to proxy...");
-                        setUseProxy(true);
-                    }
-                }}
                 // @ts-ignore
                 referrerPolicy="no-referrer"
               />

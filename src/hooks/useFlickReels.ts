@@ -120,7 +120,7 @@ export function useFlickReelsDetail(bookId: string) {
     queryKey: ["flickreels", "detail", bookId],
     queryFn: () => fetchJson<FlickReelsDetailResponse>(`/api/flickreels/detail?id=${bookId}`),
     enabled: !!bookId,
-    staleTime: 30 * 1000, // 30 seconds - video URLs have time-limited tokens
-    gcTime: 60 * 1000, // Garbage collect after 1 minute
+    staleTime: 10 * 1000, // 10 seconds - video URLs have time-limited tokens
+    gcTime: 30 * 1000, // Garbage collect after 30 seconds
   });
 }
